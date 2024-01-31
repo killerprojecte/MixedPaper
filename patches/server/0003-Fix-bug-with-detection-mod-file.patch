@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: killerprojecte <admin@fastmcmirror.org>
+Date: Wed, 31 Jan 2024 14:36:55 +0800
+Subject: [PATCH] Fix bug with detection mod file
+
+
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java b/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java
+index ee0d634dd961d41db2f82d312030dcc7e91fed3b..81b37eaca50a8afffbbe0fabc35923747fb301ee 100644
+--- a/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java
++++ b/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java
+@@ -31,6 +31,7 @@ import java.nio.file.Path;
+ import java.nio.file.Paths;
+ import java.util.*;
+ import java.util.jar.JarFile;
++import java.util.stream.Collectors;
+ import java.util.stream.Stream;
+ import java.util.zip.ZipEntry;
+ 
+@@ -91,32 +92,29 @@ public class MixedPaper extends ModContainer {
+     private static void loadMixedMods() {
+         Path folder = getModsFolder();
+         try (Stream<Path> pathStream = Files.list(folder)) {
+-            pathStream
+-                .filter(path -> {
+-                    System.out.println(path.getFileName());
+-                    System.out.println(path.getFileName().endsWith(".jar") && Files.isRegularFile(path));
+-                    return path.getFileName().endsWith(".jar") && Files.isRegularFile(path);
+-                })
+-                .forEach(path -> {
+-                    System.out.println("[MixedPaper] Loading Mod File: " + Objects.requireNonNull(path).getFileName());
+-                    try (JarFile jarFile = new JarFile(path.toFile())) {
+-                        ZipEntry configEntry = jarFile.getEntry("mixed.mod.json");
+-                        if (configEntry == null) {
+-                            System.err.println("[MixedPaper] Mod Invalid: " + path.getFileName());
+-                            return;
+-                        }
+-                        ModInfo modInfo = new Gson().fromJson(new JsonReader(new InputStreamReader(jarFile.getInputStream(configEntry))), ModInfo.class);
+-                        modMap.put(modInfo.getModId(), modInfo);
+-
+-                        addPath(path.toFile());
+-                        Class<?> initializerClazz = Class.forName(modInfo.getMainClass());
+-                        modInfo.setInitializer(initializerClazz.asSubclass(ModInitializer.class));
+-                        modInfo.getAccessWideners().forEach(accessWidenerTransformer::addAccessWidener);
+-                        modInfo.getMixinsConfig().forEach(Mixins::addConfiguration);
+-                    } catch (IOException | ClassNotFoundException e) {
+-                        e.printStackTrace(System.err);
++            List<Path> modList = pathStream
++                .filter(path -> path.toFile().getName().endsWith(".jar")).toList();
++            System.out.println("[MixedPaper] Founded " + modList.size() + " mods file");
++            modList.forEach(path -> {
++                System.out.println("[MixedPaper] Loading Mod File: " + Objects.requireNonNull(path).getFileName());
++                try (JarFile jarFile = new JarFile(path.toFile())) {
++                    ZipEntry configEntry = jarFile.getEntry("mixed.mod.json");
++                    if (configEntry == null) {
++                        System.err.println("[MixedPaper] Mod Invalid: " + path.getFileName());
++                        return;
+                     }
+-                });
++                    ModInfo modInfo = new Gson().fromJson(new JsonReader(new InputStreamReader(jarFile.getInputStream(configEntry))), ModInfo.class);
++                    modMap.put(modInfo.getModId(), modInfo);
++
++                    addPath(path.toFile());
++                    Class<?> initializerClazz = Class.forName(modInfo.getMainClass());
++                    modInfo.setInitializer(initializerClazz.asSubclass(ModInitializer.class));
++                    modInfo.getAccessWideners().forEach(accessWidenerTransformer::addAccessWidener);
++                    modInfo.getMixinsConfig().forEach(Mixins::addConfiguration);
++                } catch (IOException | ClassNotFoundException e) {
++                    e.printStackTrace(System.err);
++                }
++            });
+         } catch (IOException e) {
+             e.printStackTrace(System.err);
+         }
