@@ -1,0 +1,883 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: killerprojecte <admin@fastmcmirror.org>
+Date: Wed, 31 Jan 2024 12:30:32 +0800
+Subject: [PATCH] Mixin implement
+
+
+diff --git a/build.gradle.kts b/build.gradle.kts
+index dc2d3e866f510eaf704f87f4a2a38dc5d1b820b8..90b01e419921fa545fc2b35444a381c0df2a11d7 100644
+--- a/build.gradle.kts
++++ b/build.gradle.kts
+@@ -15,7 +15,7 @@ val alsoShade: Configuration by configurations.creating
+ dependencies {
+     implementation(project(":mixedpaper-api")) // MixedPaper // Pufferfish // Paper
+     // Pufferfish start
+-    implementation("io.papermc.paper:paper-mojangapi:1.20.2-R0.1-SNAPSHOT") {
++    implementation("io.papermc.paper:paper-mojangapi:1.20.4-R0.1-SNAPSHOT") {
+         exclude("io.papermc.paper", "paper-api")
+     }
+     // Pufferfish end
+@@ -62,6 +62,10 @@ dependencies {
+     // Pufferfish end
+     implementation("com.github.technove:Flare:34637f3f87") // Pufferfish - flare
+ 
++    implementation("net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5") // MixedPaper - mixin
++    implementation("net.bytebuddy:byte-buddy-agent:1.14.11") // MixedPaper - bytebuddy agent
++    implementation("net.fabricmc:access-widener:2.1.0") // MixedPaper - access widener
++
+     testImplementation("io.github.classgraph:classgraph:4.8.47") // Paper - mob goal test
+     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+     testImplementation("org.hamcrest:hamcrest:2.2")
+diff --git a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
+index 9d687da5bdf398bb3f6c84cdf1249a7213d09f2e..5c6a3b151a27b2dc71aa9756ff8e8280278aa0ba 100644
+--- a/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
++++ b/src/main/java/com/destroystokyo/paper/PaperVersionFetcher.java
+@@ -20,7 +20,7 @@ import java.util.stream.StreamSupport;
+ public class PaperVersionFetcher implements VersionFetcher {
+     private static final java.util.regex.Pattern VER_PATTERN = java.util.regex.Pattern.compile("^([0-9\\.]*)\\-.*R"); // R is an anchor, will always give '-R' at end
+     private static final String GITHUB_BRANCH_NAME = "master";
+-    private static final String DOWNLOAD_PAGE = "https://papermc.io/downloads/paper";
++    private static final String DOWNLOAD_PAGE = "https://github.com/killerprojecte/MixedPaper";
+     private static @Nullable String mcVer;
+ 
+     @Override
+@@ -31,8 +31,8 @@ public class PaperVersionFetcher implements VersionFetcher {
+     @Nonnull
+     @Override
+     public Component getVersionMessage(@Nonnull String serverVersion) {
+-        String[] parts = serverVersion.substring("git-Paper-".length()).split("[-\\s]");
+-        final Component updateMessage = getUpdateStatusMessage("PaperMC/Paper", GITHUB_BRANCH_NAME, parts[0]);
++        String[] parts = serverVersion.substring("git-MixedPaper-".length()).split("[-\\s]");
++        final Component updateMessage = getUpdateStatusMessage("killerprojecte/MixedPaper", GITHUB_BRANCH_NAME, parts[0]);
+         final Component history = getHistory();
+ 
+         return history != null ? TextComponent.ofChildren(updateMessage, Component.newline(), history) : updateMessage;
+@@ -56,13 +56,18 @@ public class PaperVersionFetcher implements VersionFetcher {
+ 
+     private static Component getUpdateStatusMessage(@Nonnull String repo, @Nonnull String branch, @Nonnull String versionInfo) {
+         int distance;
+-        try {
++        /*try {
+             int jenkinsBuild = Integer.parseInt(versionInfo);
+             distance = fetchDistanceFromSiteApi(jenkinsBuild, getMinecraftVersion());
+         } catch (NumberFormatException ignored) {
+             versionInfo = versionInfo.replace("\"", "");
+             distance = fetchDistanceFromGitHub(repo, branch, versionInfo);
+-        }
++        }*/
++
++        // MixedPaper - start
++        versionInfo = versionInfo.replace("\"", "");
++        distance = fetchDistanceFromGitHub(repo, branch, versionInfo);
++        // MixedPaper - end
+ 
+         switch (distance) {
+             case -1:
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java b/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee0d634dd961d41db2f82d312030dcc7e91fed3b
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/MixedPaper.java
+@@ -0,0 +1,204 @@
++package dev.rgbmc.mixedpaper;
++
++import com.google.gson.Gson;
++import com.google.gson.stream.JsonReader;
++import dev.rgbmc.mixedpaper.api.Mod;
++import dev.rgbmc.mixedpaper.api.ModContainer;
++import dev.rgbmc.mixedpaper.api.ModInitializer;
++import dev.rgbmc.mixedpaper.config.ModInfo;
++import dev.rgbmc.mixedpaper.mixins.MixedMixinService;
++import dev.rgbmc.mixedpaper.mixins.MixedMixinTransformer;
++import dev.rgbmc.mixedpaper.transformers.MixedAccessWidenerTransformer;
++import dev.rgbmc.mixedpaper.transformers.MixedTransformer;
++import net.bytebuddy.agent.ByteBuddyAgent;
++import org.spongepowered.asm.launch.MixinBootstrap;
++import org.spongepowered.asm.mixin.Mixins;
++import org.spongepowered.asm.service.MixinService;
++import sun.misc.Unsafe;
++
++import java.io.File;
++import java.io.IOException;
++import java.io.InputStreamReader;
++import java.lang.instrument.Instrumentation;
++import java.lang.invoke.MethodHandle;
++import java.lang.invoke.MethodHandles;
++import java.lang.invoke.MethodType;
++import java.lang.reflect.Field;
++import java.net.URL;
++import java.net.URLClassLoader;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.util.*;
++import java.util.jar.JarFile;
++import java.util.stream.Stream;
++import java.util.zip.ZipEntry;
++
++public class MixedPaper extends ModContainer {
++    private static final Map<String, ModInfo> modMap = new HashMap<>();
++    static MethodHandles.Lookup lookup;
++    static Unsafe unsafe;
++    private static boolean initialized = false;
++    private static MixedAccessWidenerTransformer accessWidenerTransformer;
++
++    static {
++        try {
++            Field field = Unsafe.class.getDeclaredField("theUnsafe");
++            field.setAccessible(true);
++            unsafe = (Unsafe) field.get(null);
++            Field lookupField = MethodHandles.Lookup.class.getDeclaredField("IMPL_LOOKUP");
++            Object lookupBase = unsafe.staticFieldBase(lookupField);
++            long lookupOffset = unsafe.staticFieldOffset(lookupField);
++            lookup = (MethodHandles.Lookup) unsafe.getObject(lookupBase, lookupOffset);
++        } catch (Throwable throwable) {
++            throwable.printStackTrace(System.err);
++        }
++    }
++
++    public static void initializeMixedPaper() {
++        if (initialized) {
++            System.err.println("Try to re-initialize MixedPaper is not allowed!");
++            return;
++        }
++        initialized = true;
++        System.out.println("Initializing MixedPaper");
++        MixinBootstrap.init();
++        System.out.println("| MixinBootstrap initialized");
++
++        if (!(MixinService.getService() instanceof MixedMixinService)) {
++            System.err.println("! Current mixin service NOT provide by MixedPaper");
++            return;
++        }
++        System.out.println("| MixinService initialized");
++
++        Instrumentation instrumentation = ByteBuddyAgent.install();
++        System.out.println("| Agent Injected");
++
++        MixedTransformer mixedTransformer = new MixedTransformer();
++        accessWidenerTransformer = new MixedAccessWidenerTransformer();
++        mixedTransformer.addTransformerTask(accessWidenerTransformer);
++        mixedTransformer.addTransformerTask(new MixedMixinTransformer());
++        instrumentation.addTransformer(mixedTransformer);
++        System.out.println("| MixedTransformer initialized");
++
++        loadMixedMods();
++        setInstance(new MixedPaper());
++        System.out.println("| ModContainer initialized");
++
++        System.out.println("MixedPaper initialized");
++    }
++
++    private static void loadMixedMods() {
++        Path folder = getModsFolder();
++        try (Stream<Path> pathStream = Files.list(folder)) {
++            pathStream
++                .filter(path -> {
++                    System.out.println(path.getFileName());
++                    System.out.println(path.getFileName().endsWith(".jar") && Files.isRegularFile(path));
++                    return path.getFileName().endsWith(".jar") && Files.isRegularFile(path);
++                })
++                .forEach(path -> {
++                    System.out.println("[MixedPaper] Loading Mod File: " + Objects.requireNonNull(path).getFileName());
++                    try (JarFile jarFile = new JarFile(path.toFile())) {
++                        ZipEntry configEntry = jarFile.getEntry("mixed.mod.json");
++                        if (configEntry == null) {
++                            System.err.println("[MixedPaper] Mod Invalid: " + path.getFileName());
++                            return;
++                        }
++                        ModInfo modInfo = new Gson().fromJson(new JsonReader(new InputStreamReader(jarFile.getInputStream(configEntry))), ModInfo.class);
++                        modMap.put(modInfo.getModId(), modInfo);
++
++                        addPath(path.toFile());
++                        Class<?> initializerClazz = Class.forName(modInfo.getMainClass());
++                        modInfo.setInitializer(initializerClazz.asSubclass(ModInitializer.class));
++                        modInfo.getAccessWideners().forEach(accessWidenerTransformer::addAccessWidener);
++                        modInfo.getMixinsConfig().forEach(Mixins::addConfiguration);
++                    } catch (IOException | ClassNotFoundException e) {
++                        e.printStackTrace(System.err);
++                    }
++                });
++        } catch (IOException e) {
++            e.printStackTrace(System.err);
++        }
++    }
++
++    private static Path getModsFolder() {
++        try {
++            Path folder = Paths.get(System.getProperty("user.dir"), "mods");
++            if (Files.exists(folder) && !Files.isDirectory(folder)) {
++                Files.delete(folder);
++            }
++            if (!Files.exists(folder)) Files.createDirectories(folder);
++            return folder;
++        } catch (IOException e) {
++            throw new RuntimeException(e);
++        }
++    }
++
++    public static void initializeMods() {
++        for (ModInfo mod : modMap.values()) {
++            System.out.println("[MixedPaper] Initializing Mod " + mod.getModName() + " (" + mod.getVersion() + ")");
++
++            try {
++                Class<? extends ModInitializer> clazz = mod.getInitializer();
++                ModInitializer modInitializer = clazz.getDeclaredConstructor().newInstance();
++                modInitializer.initialize(mod);
++            } catch (Exception e) {
++                System.err.println("[MixedPaper] Failed to initialize mod: " + mod.getModId());
++                e.printStackTrace(System.err);
++            }
++        }
++    }
++
++    private static void addPath(File file) {
++        try {
++            URLClassLoader loader = (URLClassLoader) MixedPaper.class.getClassLoader();
++            if (loader.getClass().getSimpleName().equals("LaunchClassLoader")) {
++                MethodHandle methodHandle =
++                    lookup.findVirtual(
++                        loader.getClass(), "addURL", MethodType.methodType(Void.TYPE, URL.class));
++                methodHandle.invoke(loader, file.toURI().toURL());
++            } else {
++                Field ucpField;
++                try {
++                    ucpField = loader.getClass().getDeclaredField("ucp");
++                } catch (NoSuchFieldException | NoSuchFieldError var7) {
++                    ucpField = loader.getClass().getSuperclass().getDeclaredField("ucp");
++                }
++
++                long ucpOffset = unsafe.objectFieldOffset(ucpField);
++                Object ucp = unsafe.getObject(loader, ucpOffset);
++                MethodHandle methodHandle =
++                    lookup.findVirtual(
++                        ucp.getClass(), "addURL", MethodType.methodType(Void.TYPE, URL.class));
++                methodHandle.invoke(ucp, file.toURI().toURL());
++            }
++        } catch (Throwable throwable) {
++            throwable.printStackTrace(System.err);
++        }
++    }
++
++    public static boolean isInitialized() {
++        return initialized;
++    }
++
++    @Override
++    public Mod getModById(String modId) {
++        return modMap.get(modId);
++    }
++
++    @Override
++    public Mod getModByName(String modName) {
++        return modMap.values().stream().filter(mod -> mod.getModName().equals(modName)).findFirst().orElse(null);
++    }
++
++    @Override
++    public List<Mod> getMods() {
++        return new ArrayList<>(modMap.values());
++    }
++
++    @Override
++    public List<String> getModIdList() {
++        return new ArrayList<>(modMap.keySet());
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/config/ModInfo.java b/src/main/java/dev/rgbmc/mixedpaper/config/ModInfo.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..1f9d7099566955879d67c50ed0b115f1e3d5a674
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/config/ModInfo.java
+@@ -0,0 +1,68 @@
++package dev.rgbmc.mixedpaper.config;
++
++import com.google.gson.annotations.SerializedName;
++import dev.rgbmc.mixedpaper.api.Mod;
++import dev.rgbmc.mixedpaper.api.ModInitializer;
++
++import java.util.List;
++
++public class ModInfo extends Mod {
++    @SerializedName("name")
++    private String name = null;
++    @SerializedName("id")
++    private String modId = null;
++    @SerializedName("mainClass")
++    private String mainClass = null;
++    @SerializedName("version")
++    private String version = null;
++    @SerializedName("mixins")
++    private List<String> mixinsConfig = List.of();
++    @SerializedName("access_widener")
++    private List<String> accessWideners = List.of();
++
++    private Class<? extends ModInitializer> initializer = null;
++
++    public ModInfo(String name, String modId, String mainClass, String version, List<String> mixinsConfig, List<String> accessWideners) {
++        this.name = name;
++        this.modId = modId;
++        this.mainClass = mainClass;
++        this.version = version;
++        this.mixinsConfig = mixinsConfig;
++        this.accessWideners = accessWideners;
++    }
++
++    @Override
++    public String getModName() {
++        return name;
++    }
++
++    public List<String> getMixinsConfig() {
++        return mixinsConfig;
++    }
++
++    public String getMainClass() {
++        return mainClass;
++    }
++
++    @Override
++    public String getModId() {
++        return modId;
++    }
++
++    @Override
++    public String getVersion() {
++        return version;
++    }
++
++    public List<String> getAccessWideners() {
++        return accessWideners;
++    }
++
++    public Class<? extends ModInitializer> getInitializer() {
++        return initializer;
++    }
++
++    public void setInitializer(Class<? extends ModInitializer> initializer) {
++        this.initializer = initializer;
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedGlobalPropertyService.java b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedGlobalPropertyService.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..44751bbf556a4fb22f41c607591dd0edbc56b639
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedGlobalPropertyService.java
+@@ -0,0 +1,39 @@
++package dev.rgbmc.mixedpaper.mixins;
++
++import org.spongepowered.asm.service.IGlobalPropertyService;
++import org.spongepowered.asm.service.IPropertyKey;
++
++import java.util.HashMap;
++
++public class MixedGlobalPropertyService implements IGlobalPropertyService {
++    private final HashMap<String, Object> map = new HashMap<>();
++
++    @Override
++    public IPropertyKey resolveKey(String name) {
++        return new MixedPropertyKey(name);
++    }
++
++    private String getKey(IPropertyKey key) {
++        return ((MixedPropertyKey) key).key;
++    }
++
++    @Override
++    public <T> T getProperty(IPropertyKey key) {
++        return (T) map.get(getKey(key));
++    }
++
++    @Override
++    public void setProperty(IPropertyKey key, Object value) {
++        map.put(getKey(key), value);
++    }
++
++    @Override
++    public <T> T getProperty(IPropertyKey key, T defaultValue) {
++        return (T) map.getOrDefault(getKey(key), defaultValue);
++    }
++
++    @Override
++    public String getPropertyString(IPropertyKey key, String defaultValue) {
++        return null;
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinBootstrap.java b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinBootstrap.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8d43ea22715f19a827a7106ea8917fc7a28f5944
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinBootstrap.java
+@@ -0,0 +1,20 @@
++package dev.rgbmc.mixedpaper.mixins;
++
++import org.spongepowered.asm.service.IMixinServiceBootstrap;
++
++public class MixedMixinBootstrap implements IMixinServiceBootstrap {
++    @Override
++    public String getName() {
++        return "MixedPaper";
++    }
++
++    @Override
++    public String getServiceClassName() {
++        return "dev.rgbmc.mixedpaper.mixins.MixedMixinService";
++    }
++
++    @Override
++    public void bootstrap() {
++
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinService.java b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinService.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..30197441e3958ba1f460df8bf90bc452dc8829dc
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinService.java
+@@ -0,0 +1,178 @@
++package dev.rgbmc.mixedpaper.mixins;
++
++import dev.rgbmc.mixedpaper.MixedPaper;
++import org.objectweb.asm.ClassReader;
++import org.objectweb.asm.tree.ClassNode;
++import org.spongepowered.asm.launch.platform.container.ContainerHandleVirtual;
++import org.spongepowered.asm.launch.platform.container.IContainerHandle;
++import org.spongepowered.asm.logging.ILogger;
++import org.spongepowered.asm.logging.LoggerAdapterConsole;
++import org.spongepowered.asm.mixin.MixinEnvironment;
++import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
++import org.spongepowered.asm.mixin.transformer.IMixinTransformerFactory;
++import org.spongepowered.asm.service.*;
++import org.spongepowered.asm.util.Constants;
++import org.spongepowered.asm.util.ReEntranceLock;
++
++import java.io.IOException;
++import java.io.InputStream;
++import java.net.URL;
++import java.util.*;
++
++public class MixedMixinService implements IMixinService, IClassProvider, IClassBytecodeProvider {
++    protected static IMixinTransformer transformer;
++    private final ReEntranceLock lock = new ReEntranceLock(1);
++    private final Map<String, ClassNode> classCache = new HashMap<>();
++
++    @Override
++    public String getName() {
++        return "MixedPaper";
++    }
++
++    @Override
++    public boolean isValid() {
++        return true;
++    }
++
++    @Override
++    public void prepare() {
++
++    }
++
++    @Override
++    public MixinEnvironment.Phase getInitialPhase() {
++        return MixinEnvironment.Phase.DEFAULT;
++    }
++
++    @Override
++    public void offer(IMixinInternal internal) {
++        if (internal instanceof IMixinTransformerFactory factory) {
++            transformer = factory.createTransformer();
++        }
++    }
++
++    @Override
++    public void init() {
++
++    }
++
++    @Override
++    public void beginPhase() {
++
++    }
++
++    @Override
++    public void checkEnv(Object bootSource) {
++
++    }
++
++    @Override
++    public ReEntranceLock getReEntranceLock() {
++        return lock;
++    }
++
++    @Override
++    public IClassProvider getClassProvider() {
++        return this;
++    }
++
++    @Override
++    public IClassBytecodeProvider getBytecodeProvider() {
++        return this;
++    }
++
++    @Override
++    public ITransformerProvider getTransformerProvider() {
++        return null;
++    }
++
++    @Override
++    public IClassTracker getClassTracker() {
++        return null;
++    }
++
++    @Override
++    public IMixinAuditTrail getAuditTrail() {
++        return null;
++    }
++
++    @Override
++    public Collection<String> getPlatformAgents() {
++        return List.of();
++    }
++
++    @Override
++    public IContainerHandle getPrimaryContainer() {
++        return new ContainerHandleVirtual(getName());
++    }
++
++    @Override
++    public Collection<IContainerHandle> getMixinContainers() {
++        return List.of();
++    }
++
++    @Override
++    public InputStream getResourceAsStream(String name) {
++        return MixedPaper.class.getClassLoader().getResourceAsStream(name);
++    }
++
++    @Override
++    public String getSideName() {
++        return Constants.SIDE_SERVER;
++    }
++
++    @Override
++    public MixinEnvironment.CompatibilityLevel getMinCompatibilityLevel() {
++        return null;
++    }
++
++    @Override
++    public MixinEnvironment.CompatibilityLevel getMaxCompatibilityLevel() {
++        return null;
++    }
++
++    @Override
++    public ILogger getLogger(String name) {
++        return new LoggerAdapterConsole(name);
++    }
++
++    @Override
++    public ClassNode getClassNode(String name) throws ClassNotFoundException, IOException {
++        return this.classCache.computeIfAbsent(name.replace('.', '/'), mapName -> {
++            InputStream stream = this.getClass().getClassLoader().getResourceAsStream(mapName + ".class");
++            ClassNode cn = new ClassNode();
++            try {
++                ClassReader classReader = new ClassReader(Objects.requireNonNull(stream));
++                classReader.accept(cn, 0);
++                return cn;
++            } catch (IOException e) {
++                throw new RuntimeException(e);
++            }
++        });
++    }
++
++    @Override
++    public ClassNode getClassNode(String name, boolean runTransformers) throws ClassNotFoundException, IOException {
++        return getClassNode(name);
++    }
++
++    @Override
++    public URL[] getClassPath() {
++        return new URL[0];
++    }
++
++    @Override
++    public Class<?> findClass(String name) throws ClassNotFoundException {
++        return Class.forName(name);
++    }
++
++    @Override
++    public Class<?> findClass(String name, boolean initialize) throws ClassNotFoundException {
++        return Class.forName(name, initialize, getClass().getClassLoader());
++    }
++
++    @Override
++    public Class<?> findAgentClass(String name, boolean initialize) throws ClassNotFoundException {
++        return findClass(name, initialize);
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinTransformer.java b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinTransformer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..adad0936e12b2f009c712954d816c5cb81ad50c8
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedMixinTransformer.java
+@@ -0,0 +1,25 @@
++package dev.rgbmc.mixedpaper.mixins;
++
++import dev.rgbmc.mixedpaper.transformers.MixedTransformer;
++import org.spongepowered.asm.mixin.MixinEnvironment;
++
++public class MixedMixinTransformer extends MixedTransformer.TransformerTask {
++    @Override
++    public byte[] transform(String className, Class<?> classBeingRedefined, byte[] classfileBuffer) {
++        try {
++            return MixedMixinService.transformer.transformClass(
++                MixinEnvironment.getDefaultEnvironment(),
++                className.replace("/", "."),
++                classfileBuffer
++            );
++        } catch (Throwable t) {
++            t.printStackTrace(System.err);
++        }
++        return classfileBuffer;
++    }
++
++    @Override
++    public boolean shouldProcess(String className) {
++        return true;
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedPropertyKey.java b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedPropertyKey.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..3f2bc40f2e24def4a74ee5a9677a2c2bb5144ce8
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/mixins/MixedPropertyKey.java
+@@ -0,0 +1,31 @@
++package dev.rgbmc.mixedpaper.mixins;
++
++import org.spongepowered.asm.service.IPropertyKey;
++
++import java.util.Objects;
++
++public class MixedPropertyKey implements IPropertyKey {
++    public final String key;
++
++    public MixedPropertyKey(String key) {
++        this.key = key;
++    }
++
++    @Override
++    public boolean equals(Object obj) {
++        if (!(obj instanceof MixedPropertyKey o)) {
++            return false;
++        }
++        return Objects.equals(key, o.key);
++    }
++
++    @Override
++    public int hashCode() {
++        return key.hashCode();
++    }
++
++    @Override
++    public String toString() {
++        return key;
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/transformers/MixedAccessWidenerTransformer.java b/src/main/java/dev/rgbmc/mixedpaper/transformers/MixedAccessWidenerTransformer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7ba84ac0632dfc708255e3cfa3b8522fb9b62c8
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/transformers/MixedAccessWidenerTransformer.java
+@@ -0,0 +1,53 @@
++package dev.rgbmc.mixedpaper.transformers;
++
++import dev.rgbmc.mixedpaper.MixedPaper;
++import net.fabricmc.accesswidener.AccessWidener;
++import net.fabricmc.accesswidener.AccessWidenerClassVisitor;
++import net.fabricmc.accesswidener.AccessWidenerReader;
++import org.objectweb.asm.ClassReader;
++import org.objectweb.asm.ClassVisitor;
++import org.objectweb.asm.ClassWriter;
++import org.objectweb.asm.Opcodes;
++import org.objectweb.asm.tree.ClassNode;
++
++import java.io.BufferedReader;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.InputStreamReader;
++
++public class MixedAccessWidenerTransformer extends MixedTransformer.TransformerTask {
++
++    private final AccessWidener accessWidener = new AccessWidener();
++    private final AccessWidenerReader accessWidenerReader = new AccessWidenerReader(accessWidener);
++
++    public void addAccessWidener(String path) {
++        InputStream inputStream = MixedPaper.class.getClassLoader().getResourceAsStream(path);
++        if (inputStream == null) {
++            System.err.println("[MixedPaper] Failed to read access-widener file: " + path);
++            return;
++        }
++        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
++        try {
++            accessWidenerReader.read(reader);
++        } catch (IOException e) {
++            e.printStackTrace(System.err);
++        }
++    }
++
++    @Override
++    public byte[] transform(String className, Class<?> classBeingRedefined, byte[] classfileBuffer) {
++        ClassReader classReader = new ClassReader(classfileBuffer);
++        ClassNode classNode = new ClassNode(Opcodes.ASM9);
++        ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
++        classReader.accept(classNode, 0);
++
++        ClassVisitor visitor = AccessWidenerClassVisitor.createClassVisitor(Opcodes.ASM9, classWriter, accessWidener);
++        classNode.accept(visitor);
++        return classWriter.toByteArray();
++    }
++
++    @Override
++    public boolean shouldProcess(String className) {
++        return accessWidener.getTargets().contains(className.replace("/", "."));
++    }
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/transformers/MixedTransformer.java b/src/main/java/dev/rgbmc/mixedpaper/transformers/MixedTransformer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..113e0d2d5daf2af70754e1767af3496497f6ebc6
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/transformers/MixedTransformer.java
+@@ -0,0 +1,32 @@
++package dev.rgbmc.mixedpaper.transformers;
++
++import java.lang.instrument.ClassFileTransformer;
++import java.lang.instrument.IllegalClassFormatException;
++import java.security.ProtectionDomain;
++import java.util.ArrayList;
++import java.util.List;
++
++public class MixedTransformer implements ClassFileTransformer {
++    private final List<TransformerTask> transformerTasks = new ArrayList<>();
++
++    @Override
++    public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined, ProtectionDomain protectionDomain, byte[] classfileBuffer) throws IllegalClassFormatException {
++        byte[] copiedBuffer = classfileBuffer;
++        for (TransformerTask transformerTask : transformerTasks) {
++            if (transformerTask.shouldProcess(className)) {
++                copiedBuffer = transformerTask.transform(className, classBeingRedefined, copiedBuffer);
++            }
++        }
++        return copiedBuffer;
++    }
++
++    public void addTransformerTask(TransformerTask transformerTask) {
++        transformerTasks.add(transformerTask);
++    }
++
++    public abstract static class TransformerTask {
++        public abstract byte[] transform(String className, Class<?> classBeingRedefined, byte[] classfileBuffer);
++
++        public abstract boolean shouldProcess(String className);
++    }
++}
+diff --git a/src/main/java/gg/pufferfish/pufferfish/PufferfishVersionFetcher.java b/src/main/java/gg/pufferfish/pufferfish/PufferfishVersionFetcher.java
+index 893d8c0946ef71a0561221dd76bffff0dc940d56..13fc3a36ea4b7c99501e4d6eb9d69fe9213588b6 100644
+--- a/src/main/java/gg/pufferfish/pufferfish/PufferfishVersionFetcher.java
++++ b/src/main/java/gg/pufferfish/pufferfish/PufferfishVersionFetcher.java
+@@ -27,11 +27,11 @@ import org.jetbrains.annotations.Nullable;
+ 
+ public class PufferfishVersionFetcher implements VersionFetcher {
+ 	
+-	private static final Logger LOGGER = Logger.getLogger("PufferfishVersionFetcher");
++	private static final Logger LOGGER = Logger.getLogger("MixedPaperVersionFetcher");
+ 	private static final HttpClient client = HttpClient.newHttpClient();
+ 	
+ 	private static final URI JENKINS_URI = URI.create("https://ci.pufferfish.host/job/Pufferfish-1.20/lastSuccessfulBuild/buildNumber");
+-	private static final String GITHUB_FORMAT = "https://api.github.com/repos/pufferfish-gg/Pufferfish/compare/ver/1.20...%s";
++	private static final String GITHUB_FORMAT = "https://api.github.com/repos/killerprojecte/MixedPaper/compare/master...%s";
+ 	
+ 	private static final HttpResponse.BodyHandler<JsonObject> JSON_OBJECT_BODY_HANDLER = responseInfo -> HttpResponse.BodySubscribers
+ 			.mapping(
+@@ -54,11 +54,13 @@ public class PufferfishVersionFetcher implements VersionFetcher {
+ 		} else {
+ 			final String versionString = parts[2];
+ 			
+-			try {
++			/*try {
+ 				component = this.fetchJenkinsVersion(Integer.parseInt(versionString));
+ 			} catch (NumberFormatException e) {
+ 				component = this.fetchGithubVersion(versionString.substring(1, versionString.length() - 1));
+-			}
++			}*/
++
++            component = this.fetchGithubVersion(versionString.substring(1, versionString.length() - 1)); // MixedPaper
+ 		}
+ 		
+ 		final @Nullable Component history = this.getHistory();
+@@ -112,7 +114,7 @@ public class PufferfishVersionFetcher implements VersionFetcher {
+ 	
+ 	private @NotNull Component getResponseMessage(final int versionDiff) {
+ 		return switch (Math.max(-1, Math.min(1, versionDiff))) {
+-			case -1 -> text("You are running an unsupported version of Pufferfish.", RED);
++			case -1 -> text("You are running an unsupported version of MixedPaper.", RED);
+ 			case 0 -> text("You are on the latest version!", GREEN);
+ 			default -> text("You are running " + versionDiff + " version" + (versionDiff == 1 ? "" : "s") + " beyond. " +
+ 							"Please update your server when possible to maintain stability, security, and receive the latest optimizations.",
+@@ -133,4 +135,4 @@ public class PufferfishVersionFetcher implements VersionFetcher {
+ 		
+ 		return Component.text("Previous version: " + oldVersion, NamedTextColor.GRAY, TextDecoration.ITALIC);
+ 	}
+-}
+\ No newline at end of file
++}
+diff --git a/src/main/java/net/minecraft/server/dedicated/DedicatedServer.java b/src/main/java/net/minecraft/server/dedicated/DedicatedServer.java
+index c5f92c80d7ca1e1c7f5b9304a5a1173ebfd9c269..ea11b935fdb818f9e150d9c327c205878044ec2c 100644
+--- a/src/main/java/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/src/main/java/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -189,6 +189,10 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+         }
+         // Paper end - detect running as root
+ 
++        // MixedPaper - start
++        dev.rgbmc.mixedpaper.MixedPaper.initializeMods();
++        // MixedPaper - end
++
+         DedicatedServer.LOGGER.info("Loading properties");
+         DedicatedServerProperties dedicatedserverproperties = this.settings.getProperties();
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/Main.java b/src/main/java/org/bukkit/craftbukkit/Main.java
+index ce341f42b3a5e17fb6d1f7de8057e73137ae2a6e..31d0565c5cf0a054201f979df0773622f5ff4959 100644
+--- a/src/main/java/org/bukkit/craftbukkit/Main.java
++++ b/src/main/java/org/bukkit/craftbukkit/Main.java
+@@ -184,6 +184,10 @@ public class Main {
+             }
+         };
+ 
++        // MixedPaper start - initialize services
++        dev.rgbmc.mixedpaper.MixedPaper.initializeMixedPaper();
++        // MixedPaper end
++
+         OptionSet options = null;
+ 
+         // Paper start - preload logger classes to avoid plugins mixing versions
+diff --git a/src/main/resources/META-INF/services/org.spongepowered.asm.service.IGlobalPropertyService b/src/main/resources/META-INF/services/org.spongepowered.asm.service.IGlobalPropertyService
+new file mode 100644
+index 0000000000000000000000000000000000000000..1887bf6693ce440a214af0ee3b3cf45416d11447
+--- /dev/null
++++ b/src/main/resources/META-INF/services/org.spongepowered.asm.service.IGlobalPropertyService
+@@ -0,0 +1 @@
++dev.rgbmc.mixedpaper.mixins.MixedGlobalPropertyService
+\ No newline at end of file
+diff --git a/src/main/resources/META-INF/services/org.spongepowered.asm.service.IMixinService b/src/main/resources/META-INF/services/org.spongepowered.asm.service.IMixinService
+new file mode 100644
+index 0000000000000000000000000000000000000000..2dac39273f52de0d31e47f8be8ff12ed749ac96f
+--- /dev/null
++++ b/src/main/resources/META-INF/services/org.spongepowered.asm.service.IMixinService
+@@ -0,0 +1 @@
++dev.rgbmc.mixedpaper.mixins.MixedMixinService
+\ No newline at end of file
+diff --git a/src/main/resources/META-INF/services/org.spongepowered.asm.service.IMixinServiceBootstrap b/src/main/resources/META-INF/services/org.spongepowered.asm.service.IMixinServiceBootstrap
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc6a9595d0208a4006fabf9ad689f411fee5dfa0
+--- /dev/null
++++ b/src/main/resources/META-INF/services/org.spongepowered.asm.service.IMixinServiceBootstrap
+@@ -0,0 +1 @@
++dev.rgbmc.mixedpaper.mixins.MixedMixinBootstrap
+\ No newline at end of file

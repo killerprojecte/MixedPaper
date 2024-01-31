@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: killerprojecte <admin@fastmcmirror.org>
+Date: Tue, 30 Jan 2024 21:58:19 +0800
+Subject: [PATCH] Mixin implement
+
+
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/api/Mod.java b/src/main/java/dev/rgbmc/mixedpaper/api/Mod.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..e05d46317e61445c65953f0f83c579d086ec755f
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/api/Mod.java
+@@ -0,0 +1,9 @@
++package dev.rgbmc.mixedpaper.api;
++
++public abstract class Mod {
++    public abstract String getModName();
++
++    public abstract String getModId();
++
++    public abstract String getVersion();
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/api/ModContainer.java b/src/main/java/dev/rgbmc/mixedpaper/api/ModContainer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..67c2bd81a61888fd1adca6aaea3daaab7b55c811
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/api/ModContainer.java
+@@ -0,0 +1,23 @@
++package dev.rgbmc.mixedpaper.api;
++
++import java.util.List;
++
++public abstract class ModContainer {
++    private static ModContainer instance;
++
++    public static ModContainer getInstance() {
++        return instance;
++    }
++
++    public static void setInstance(ModContainer instance) {
++        ModContainer.instance = instance;
++    }
++
++    public abstract Mod getModById(String modId);
++
++    public abstract Mod getModByName(String modName);
++
++    public abstract List<Mod> getMods();
++
++    public abstract List<String> getModIdList();
++}
+diff --git a/src/main/java/dev/rgbmc/mixedpaper/api/ModInitializer.java b/src/main/java/dev/rgbmc/mixedpaper/api/ModInitializer.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..0c7731bab2cb4e38789430b82c7153070b68d07d
+--- /dev/null
++++ b/src/main/java/dev/rgbmc/mixedpaper/api/ModInitializer.java
+@@ -0,0 +1,5 @@
++package dev.rgbmc.mixedpaper.api;
++
++public abstract class ModInitializer {
++    public abstract void initialize(Mod mod);
++}
